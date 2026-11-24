@@ -1,0 +1,7 @@
+EasyFlow categorized upload inventory
+
+01_EasyFlow_App_Core.zip: 20 files
+02_EasyFlow_Tests.zip: 22 files
+03_EasyFlow_Documentation.zip: 68 files
+04_EasyFlow_Developer_Tools.zip: 29 files
+Total original project files categorized: 139
