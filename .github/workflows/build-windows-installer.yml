@@ -13,7 +13,7 @@ jobs:
       - name: Check out uploaded package archives
         uses: actions/checkout@v4
 
-      - name: Extract categorized EasyFlow source archives
+      - name: Extract and normalize EasyFlow source archives
         shell: pwsh
         run: |
           $archives = @(
@@ -22,11 +22,31 @@ jobs:
             '03_EasyFlow_Documentation.zip',
             '04_EasyFlow_Developer_Tools.zip'
           )
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'easyflow-source-archives'
+          $projectRoot = Join-Path $env:GITHUB_WORKSPACE 'EasyFlow'
+          if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }
+          if (Test-Path $projectRoot) { Remove-Item $projectRoot -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
           foreach ($archive in $archives) {
-            if (!(Test-Path $archive)) { throw "Missing source archive: $archive" }
-            Expand-Archive -LiteralPath $archive -DestinationPath $env:GITHUB_WORKSPACE -Force
+            $archivePath = Join-Path $env:GITHUB_WORKSPACE $archive
+            if (!(Test-Path $archivePath)) { throw "Missing source archive: $archive" }
+            Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force
           }
-          if (!(Test-Path 'EasyFlow/requirements.txt')) { throw 'EasyFlow source extraction failed.' }
+          $launcher = Get-ChildItem -Path $extractRoot -Filter 'desktop_launcher.py' -Recurse -File |
+            Where-Object { Test-Path (Join-Path $_.DirectoryName 'build_windows_exe.py') } |
+            Select-Object -First 1
+          if ($null -eq $launcher) {
+            Write-Host 'Extracted archive tree:'
+            Get-ChildItem -Path $extractRoot -Recurse -File | Select-Object -ExpandProperty FullName | Write-Host
+            throw 'Could not find desktop_launcher.py beside build_windows_exe.py in the extracted archives.'
+          }
+          $sourceRoot = $launcher.Directory.FullName
+          New-Item -ItemType Directory -Force -Path $projectRoot | Out-Null
+          Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $projectRoot -Recurse -Force
+          if (!(Test-Path (Join-Path $projectRoot 'desktop_launcher.py'))) { throw 'Launcher normalization failed.' }
+          if (!(Test-Path (Join-Path $projectRoot 'requirements.txt'))) { throw 'requirements.txt is missing from the application source.' }
+          Write-Host "Normalized EasyFlow project root: $projectRoot"
+          Get-ChildItem -Path $projectRoot -Force | Select-Object Name, Mode
 
       - name: Set up Python 3.11 x64
         uses: actions/setup-python@v5
@@ -53,6 +73,14 @@ jobs:
           if ((Get-Item 'installer_assets/MicrosoftEdgeWebView2Setup.exe').Length -lt 100000) {
             throw 'WebView2 bootstrapper download appears incomplete.'
           }
+
+      - name: Verify launcher before building
+        shell: pwsh
+        working-directory: EasyFlow
+        run: |
+          if (!(Test-Path 'desktop_launcher.py')) { throw 'desktop_launcher.py is not at the project root.' }
+          if (!(Test-Path 'build_windows_exe.py')) { throw 'build_windows_exe.py is not at the project root.' }
+          Write-Host 'Launcher and PyInstaller build script are both at the project root.'
 
       - name: Build desktop application
         shell: pwsh
@@ -95,4 +123,3 @@ jobs:
             EasyFlow/installer_output/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
-
