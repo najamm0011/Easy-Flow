@@ -1,1 +1,99 @@
+name: Build EasyFlow Windows Installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out uploaded package archives
+        uses: actions/checkout@v4
+
+      - name: Extract categorized EasyFlow source archives
+        shell: pwsh
+        run: |
+          $archives = @(
+            '01_EasyFlow_App_Core.zip',
+            '02_EasyFlow_Tests.zip',
+            '03_EasyFlow_Documentation.zip',
+            '04_EasyFlow_Developer_Tools.zip'
+          )
+          foreach ($archive in $archives) {
+            if (!(Test-Path $archive)) { throw "Missing source archive: $archive" }
+            Expand-Archive -LiteralPath $archive -DestinationPath $env:GITHUB_WORKSPACE -Force
+          }
+          if (!(Test-Path 'EasyFlow/requirements.txt')) { throw 'EasyFlow source extraction failed.' }
+
+      - name: Set up Python 3.11 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+          cache: pip
+          cache-dependency-path: EasyFlow/requirements.txt
+
+      - name: Install application and build dependencies
+        shell: pwsh
+        working-directory: EasyFlow
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Download Microsoft WebView2 Evergreen Bootstrapper
+        shell: pwsh
+        working-directory: EasyFlow
+        run: |
+          New-Item -ItemType Directory -Force -Path installer_assets | Out-Null
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile 'installer_assets/MicrosoftEdgeWebView2Setup.exe'
+          if ((Get-Item 'installer_assets/MicrosoftEdgeWebView2Setup.exe').Length -lt 100000) {
+            throw 'WebView2 bootstrapper download appears incomplete.'
+          }
+
+      - name: Build desktop application
+        shell: pwsh
+        working-directory: EasyFlow
+        run: python build_windows_exe.py
+
+      - name: Verify desktop executable exists
+        shell: pwsh
+        working-directory: EasyFlow
+        run: |
+          if (!(Test-Path 'dist/EasyFlow/EasyFlow.exe')) { throw 'EasyFlow.exe was not produced.' }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Compile single-file Windows installer
+        shell: pwsh
+        working-directory: EasyFlow
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) { throw 'Inno Setup compiler was not found.' }
+          & $iscc 'EasyFlow_Installer.iss'
+          if (!(Test-Path 'installer_output/EasyFlow_Setup.exe')) { throw 'EasyFlow_Setup.exe was not produced.' }
+
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        working-directory: EasyFlow
+        run: |
+          $hash = (Get-FileHash 'installer_output/EasyFlow_Setup.exe' -Algorithm SHA256).Hash.ToLower()
+          "$hash  EasyFlow_Setup.exe" | Out-File 'installer_output/SHA256SUMS.txt' -Encoding ascii
+          Write-Host "EasyFlow_Setup.exe SHA256: $hash"
+
+      - name: Upload final installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: EasyFlow-Windows-x64-Installer
+          path: |
+            EasyFlow/installer_output/EasyFlow_Setup.exe
+            EasyFlow/installer_output/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
 
